@@ -1,7 +1,7 @@
 package pdsql
 
 import (
-	"github.com/wenerme/coredns-pdsql/pdnsmodel"
+	"github.com/drahoslavzan/coredns-pdsql/pdnsmodel"
 	"log"
 
 	"github.com/coredns/caddy"

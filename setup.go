@@ -1,7 +1,6 @@
 package pdsql
 
 import (
-	"github.com/drahoslavzan/coredns-pdsql/pdnsmodel"
 	"log"
 
 	"github.com/coredns/caddy"
@@ -49,11 +48,6 @@ func setup(c *caddy.Controller) error {
 			}
 			backend.Debug = true
 			log.Println(Name, "enable log", args)
-		case "auto-migrate":
-			// currently only use records table
-			if err := backend.AutoMigrate(); err != nil {
-				return err
-			}
 		default:
 			return plugin.Error("pdsql", c.Errf("unexpected '%v' command", x))
 		}
@@ -71,8 +65,4 @@ func setup(c *caddy.Controller) error {
 		})
 
 	return nil
-}
-
-func (pdb PowerDNSGenericSQLBackend) AutoMigrate() error {
-	return pdb.DB.AutoMigrate(&pdnsmodel.Record{}, &pdnsmodel.Domain{}).Error
 }

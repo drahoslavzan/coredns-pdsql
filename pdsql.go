@@ -121,7 +121,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 	return 0, w.WriteMsg(a)
 }
 
-func (pdb PowerDNSGenericSQLBackend) SearchWildcard(qname string, qtype uint16) (redords []*pdnsmodel.Record, err error) {
+func (pdb PowerDNSGenericSQLBackend) SearchWildcard(qname string, qtype uint16) (records []*pdnsmodel.Record, err error) {
 	// find domain, then find matched sub domain
 	name := qname
 	qnameNoDot := qname[:len(qname)-1]
@@ -142,7 +142,7 @@ NEXT_ZONE:
 		return nil, err
 	}
 
-	if err := pdb.Find(&redords, "domain_id = ? and ( ? = 'ANY' or type = ? ) and name like '%*%'", domain.ID, typ, typ).Error; err != nil {
+	if err := pdb.Find(&records, "domain_id = ? AND (? = 'ANY' OR type = ?) AND name LIKE '%*%'", domain.ID, typ, typ).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
@@ -150,12 +150,12 @@ NEXT_ZONE:
 	}
 	// filter
 	var matched []*pdnsmodel.Record
-	for _, v := range redords {
+	for _, v := range records {
 		if WildcardMatch(qnameNoDot, v.Name) {
 			matched = append(matched, v)
 		}
 	}
-	redords = matched
+	records = matched
 	return
 }
 

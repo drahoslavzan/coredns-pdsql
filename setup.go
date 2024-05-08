@@ -6,6 +6,7 @@ import (
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin"
+	"github.com/drahoslavzan/coredns-pdsql/pdnsmodel"
 	"github.com/jinzhu/gorm"
 )
 
@@ -65,4 +66,8 @@ func setup(c *caddy.Controller) error {
 		})
 
 	return nil
+}
+
+func (pdb PowerDNSGenericSQLBackend) AutoMigrate() error {
+	return pdb.DB.AutoMigrate(&pdnsmodel.Record{}, &pdnsmodel.Domain{}).Error
 }

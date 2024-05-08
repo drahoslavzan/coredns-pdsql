@@ -2,6 +2,7 @@
 package pdsql
 
 import (
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -71,6 +72,10 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 				hrd.Name += "."
 			}
 			rr := dns.TypeToRR[typ]()
+
+			if pdb.Debug {
+				log.Printf("response: %s | %s | %s\n", v.Content, hrd.Name, rr.String())
+			}
 
 			// todo support more type
 			// this is enough for most query

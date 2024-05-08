@@ -33,8 +33,11 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 	a.Compress = true
 	a.Authoritative = true
 
+	qname := strings.ToLower(state.QName())
+	stype := strings.ToUpper(state.Type())
+
 	var records []*pdnsmodel.Record
-	query := pdnsmodel.Record{Name: state.QName(), Type: state.Type(), Disabled: false}
+	query := pdnsmodel.Record{Name: qname, Type: stype, Disabled: false}
 	if query.Name != "." {
 		// remove last dot
 		query.Name = query.Name[:len(query.Name)-1]
@@ -50,7 +53,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			query.Type = "SOA"
 			if pdb.Where(query).Find(&records).Error == nil {
 				rr := new(dns.SOA)
-				rr.Hdr = dns.RR_Header{Name: state.QName(), Rrtype: dns.TypeSOA, Class: state.QClass()}
+				rr.Hdr = dns.RR_Header{Name: qname, Rrtype: dns.TypeSOA, Class: state.QClass()}
 				if ParseSOA(rr, records[0].Content) {
 					a.Extra = append(a.Extra, rr)
 				}
@@ -60,25 +63,20 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 		}
 	} else {
 		if len(records) == 0 {
-			records, err = pdb.SearchWildcard(state.QName(), state.QType())
+			records, err = pdb.SearchWildcard(qname, state.QType())
 			if err != nil {
 				return dns.RcodeServerFailure, err
 			}
 		}
 		for _, v := range records {
 			typ := dns.StringToType[v.Type]
-			hrd := dns.RR_Header{Name: state.QName(), Rrtype: typ, Class: state.QClass(), Ttl: v.Ttl}
+			hrd := dns.RR_Header{Name: qname, Rrtype: typ, Class: state.QClass(), Ttl: v.Ttl}
 			if !strings.HasSuffix(hrd.Name, ".") {
 				hrd.Name += "."
 			}
 			rr := dns.TypeToRR[typ]()
 
-			if pdb.Debug {
-				log.Printf("response: %s | %s | %s\n", v.Content, hrd.Name, rr.String())
-			}
-
-			// todo support more type
-			// this is enough for most query
+			// TODO: support more types
 			switch rr := rr.(type) {
 			case *dns.SOA:
 				rr.Hdr = hrd
@@ -92,28 +90,40 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 				rr.Hdr = hrd
 				rr.AAAA = net.ParseIP(v.Content)
 			case *dns.MX:
+				c := strings.Split(v.Content, ",")
 				rr.Hdr = hrd
-				rr.Mx = v.Content
+				rr.Mx = dotEnd(c[0])
+				rr.Preference = 1
+				if len(c) > 1 {
+					p, err := strconv.ParseUint(c[1], 10, 16)
+					if err != nil {
+						if pdb.Debug {
+							log.Printf("%s: error: %v\n", v.Content, err)
+						}
+					} else {
+						rr.Preference = uint16(p)
+					}
+				}
 			case *dns.TXT:
 				rr.Hdr = hrd
 				rr.Txt = []string{v.Content}
 			case *dns.NS:
 				rr.Hdr = hrd
-				rr.Ns = v.Content
+				rr.Ns = dotEnd(v.Content)
 			case *dns.PTR:
 				rr.Hdr = hrd
-				// pdns don't need the dot but when we answer, we need it
-				if strings.HasSuffix(v.Content, ".") {
-					rr.Ptr = v.Content
-				} else {
-					rr.Ptr = v.Content + "."
-				}
+				rr.Ptr = dotEnd(v.Content) // pdns don't need the dot but when we answer, we need it
 			default:
 				// drop unsupported
+				if pdb.Debug {
+					log.Printf("unsupported RR type: %s\n", v.Type)
+				}
 			}
 
 			if rr == nil {
-				// invalid record
+				if pdb.Debug {
+					log.Printf("invalid RR type: %s\n", v.Type)
+				}
 			} else {
 				a.Answer = append(a.Answer, rr)
 			}
@@ -246,4 +256,11 @@ func equal(a, b string) bool {
 		}
 	}
 	return true
+}
+
+func dotEnd(s string) string {
+	if strings.HasSuffix(s, ".") {
+		return s
+	}
+	return s + "."
 }

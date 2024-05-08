@@ -78,6 +78,8 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 
 			// TODO: support more types
 			switch rr := rr.(type) {
+			// name records, such as NS, MX, etc. have to be fully qualified domain names, ending with the dot.
+
 			case *dns.SOA:
 				rr.Hdr = hrd
 				if !ParseSOA(rr, v.Content) {
@@ -90,9 +92,9 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 				rr.Hdr = hrd
 				rr.AAAA = net.ParseIP(v.Content)
 			case *dns.MX:
-				c := strings.Split(v.Content, ",")
+				c := strings.Split(v.Content, " ")
 				rr.Hdr = hrd
-				rr.Mx = dotEnd(c[0])
+				rr.Mx = c[0]
 				rr.Preference = 1
 				if len(c) > 1 {
 					p, err := strconv.ParseUint(c[1], 10, 16)
@@ -109,10 +111,10 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 				rr.Txt = []string{v.Content}
 			case *dns.NS:
 				rr.Hdr = hrd
-				rr.Ns = dotEnd(v.Content)
+				rr.Ns = v.Content
 			case *dns.PTR:
 				rr.Hdr = hrd
-				rr.Ptr = dotEnd(v.Content) // pdns don't need the dot but when we answer, we need it
+				rr.Ptr = v.Content
 			default:
 				// drop unsupported
 				if pdb.Debug {
@@ -157,7 +159,7 @@ NEXT_ZONE:
 		return nil, err
 	}
 
-	if err := pdb.Find(&records, "domain_id = ? AND (? = 'ANY' OR type = ?) AND name LIKE '%*%'", domain.ID, typ, typ).Error; err != nil {
+	if err := pdb.Find(&records, "dns_domain_id = ? AND (? = 'ANY' OR rec_type = ?) AND name LIKE '%*%'", domain.ID, typ, typ).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
@@ -256,11 +258,4 @@ func equal(a, b string) bool {
 		}
 	}
 	return true
-}
-
-func dotEnd(s string) string {
-	if strings.HasSuffix(s, ".") {
-		return s
-	}
-	return s + "."
 }

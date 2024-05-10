@@ -60,14 +60,14 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 
 	qname := strings.ToLower(state.QName())
 
-	var domain *pdnsmodel.Domain
+	var domains []*pdnsmodel.Domain
 	query := pdnsmodel.Domain{Name: qname}
 	if query.Name != "." {
 		// remove last dot
 		query.Name = query.Name[:len(query.Name)-1]
 	}
 
-	if err := pdb.Where(query).First(&domain).Error; err != nil {
+	if err := pdb.Where(query).Find(&domains).Limit(1).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			rr := pdb.recSOA
 			rr.Hdr = dns.RR_Header{Name: qname, Rrtype: dns.TypeSOA, Class: state.QClass()}
@@ -75,7 +75,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 		} else {
 			return dns.RcodeServerFailure, err
 		}
-	} else if domain != nil {
+	} else if len(domains) > 0 {
 		stype := strings.ToUpper(state.Type())
 		typ := dns.StringToType[stype]
 		hdr := dns.RR_Header{Name: qname, Rrtype: typ, Class: state.QClass(), Ttl: pdb.ttl}

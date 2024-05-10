@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/drahoslavzan/coredns-pdsql/pdnsmodel"
+	"github.com/drahoslavzan/srvutils/env"
 
 	"github.com/coredns/coredns/plugin"
 	"github.com/coredns/coredns/request"
@@ -22,9 +23,33 @@ type PowerDNSGenericSQLBackend struct {
 	*gorm.DB
 	Debug bool
 	Next  plugin.Handler
+
+	ttl     uint32
+	recA    net.IP
+	recAAAA net.IP
+	recSOA  dns.SOA
+	recMX   string
+	recNS   string
+}
+
+func NewPowerDNSGenericSQLBackend() *PowerDNSGenericSQLBackend {
+	ret := &PowerDNSGenericSQLBackend{
+		recA:    net.ParseIP(env.String("A")),
+		recAAAA: net.ParseIP(env.String("AAAA")),
+		recMX:   env.String("MX"),
+		recNS:   env.String("NS"),
+		ttl:     uint32(env.IntDef("TTL", 3600)),
+	}
+
+	if !ParseSOA(&ret.recSOA, env.String("SOA")) {
+		panic("parsing SOA failed")
+	}
+
+	return ret
 }
 
 func (pdb PowerDNSGenericSQLBackend) Name() string { return Name }
+
 func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	state := request.Request{W: w, Req: r}
 
@@ -34,103 +59,66 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 	a.Authoritative = true
 
 	qname := strings.ToLower(state.QName())
-	stype := strings.ToUpper(state.Type())
 
-	var records []*pdnsmodel.Record
-	query := pdnsmodel.Record{Name: qname, Type: stype, Disabled: false}
+	var domain *pdnsmodel.Domain
+	query := pdnsmodel.Domain{Name: qname}
 	if query.Name != "." {
 		// remove last dot
 		query.Name = query.Name[:len(query.Name)-1]
 	}
 
-	switch state.QType() {
-	case dns.TypeANY:
-		query.Type = ""
-	}
-
-	if err := pdb.Where(query).Find(&records).Error; err != nil {
+	if err := pdb.Where(query).First(&domain).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
-			query.Type = "SOA"
-			if pdb.Where(query).Find(&records).Error == nil {
-				rr := new(dns.SOA)
-				rr.Hdr = dns.RR_Header{Name: qname, Rrtype: dns.TypeSOA, Class: state.QClass()}
-				if ParseSOA(rr, records[0].Content) {
-					a.Extra = append(a.Extra, rr)
-				}
-			}
+			rr := pdb.recSOA
+			rr.Hdr = dns.RR_Header{Name: qname, Rrtype: dns.TypeSOA, Class: state.QClass()}
+			a.Extra = append(a.Extra, &rr)
 		} else {
 			return dns.RcodeServerFailure, err
 		}
-	} else {
-		if len(records) == 0 {
-			records, err = pdb.SearchWildcard(qname, state.QType())
-			if err != nil {
-				return dns.RcodeServerFailure, err
+	} else if domain != nil {
+		stype := strings.ToUpper(state.Type())
+		typ := dns.StringToType[stype]
+		hdr := dns.RR_Header{Name: qname, Rrtype: typ, Class: state.QClass(), Ttl: pdb.ttl}
+		if !strings.HasSuffix(hdr.Name, ".") {
+			hdr.Name += "."
+		}
+		rr := dns.TypeToRR[typ]()
+
+		switch rr := rr.(type) {
+		// name records, such as NS, MX, etc. have to be fully qualified domain names, ending with the dot.
+
+		case *dns.SOA:
+			*rr = pdb.recSOA
+			rr.Hdr = hdr
+		case *dns.NS:
+			rr.Hdr = hdr
+			rr.Ns = pdb.recNS
+		case *dns.A:
+			rr.Hdr = hdr
+			rr.A = pdb.recA
+		case *dns.AAAA:
+			rr.Hdr = hdr
+			rr.AAAA = pdb.recAAAA
+		case *dns.MX:
+			rr.Hdr = hdr
+			rr.Mx = pdb.recMX
+			rr.Preference = 1
+		default:
+			// drop unsupported
+			if pdb.Debug {
+				log.Printf("unsupported RR type: %s\n", stype)
 			}
 		}
-		for _, v := range records {
-			typ := dns.StringToType[v.Type]
-			hrd := dns.RR_Header{Name: qname, Rrtype: typ, Class: state.QClass(), Ttl: v.Ttl}
-			if !strings.HasSuffix(hrd.Name, ".") {
-				hrd.Name += "."
-			}
-			rr := dns.TypeToRR[typ]()
 
-			// TODO: support more types
-			switch rr := rr.(type) {
-			// name records, such as NS, MX, etc. have to be fully qualified domain names, ending with the dot.
-
-			case *dns.SOA:
-				rr.Hdr = hrd
-				if !ParseSOA(rr, v.Content) {
-					rr = nil
-				}
-			case *dns.A:
-				rr.Hdr = hrd
-				rr.A = net.ParseIP(v.Content)
-			case *dns.AAAA:
-				rr.Hdr = hrd
-				rr.AAAA = net.ParseIP(v.Content)
-			case *dns.MX:
-				c := strings.Split(v.Content, " ")
-				rr.Hdr = hrd
-				rr.Mx = c[0]
-				rr.Preference = 1
-				if len(c) > 1 {
-					p, err := strconv.ParseUint(c[1], 10, 16)
-					if err != nil {
-						if pdb.Debug {
-							log.Printf("%s: error: %v\n", v.Content, err)
-						}
-					} else {
-						rr.Preference = uint16(p)
-					}
-				}
-			case *dns.TXT:
-				rr.Hdr = hrd
-				rr.Txt = []string{v.Content}
-			case *dns.NS:
-				rr.Hdr = hrd
-				rr.Ns = v.Content
-			case *dns.PTR:
-				rr.Hdr = hrd
-				rr.Ptr = v.Content
-			default:
-				// drop unsupported
-				if pdb.Debug {
-					log.Printf("unsupported RR type: %s\n", v.Type)
-				}
+		if rr == nil {
+			if pdb.Debug {
+				log.Printf("invalid RR type: %s\n", stype)
 			}
-
-			if rr == nil {
-				if pdb.Debug {
-					log.Printf("invalid RR type: %s\n", v.Type)
-				}
-			} else {
-				a.Answer = append(a.Answer, rr)
-			}
+		} else {
+			a.Answer = append(a.Answer, rr)
 		}
 	}
+
 	if len(a.Answer) == 0 {
 		return plugin.NextOrFailure(pdb.Name(), pdb.Next, ctx, w, r)
 	}

@@ -18,7 +18,8 @@ func init() {
 }
 
 func setup(c *caddy.Controller) error {
-	backend := PowerDNSGenericSQLBackend{}
+	backend := NewPowerDNSGenericSQLBackend()
+
 	c.Next()
 	if !c.NextArg() {
 		return plugin.Error("pdsql", c.ArgErr())

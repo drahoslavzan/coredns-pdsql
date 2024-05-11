@@ -107,7 +107,6 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			rr.Preference = 1
 		case *dns.CAA:
 			rr.Hdr = hdr
-			rr.Flag = 0
 			rr.Tag = "issue"
 			rr.Value = pdb.crtIssuer
 		default:

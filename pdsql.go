@@ -24,21 +24,23 @@ type PowerDNSGenericSQLBackend struct {
 	Debug bool
 	Next  plugin.Handler
 
-	ttl     uint32
-	recA    net.IP
-	recAAAA net.IP
-	recSOA  dns.SOA
-	recMX   string
-	recNS   string
+	ttl       uint32
+	recA      net.IP
+	recAAAA   net.IP
+	recSOA    dns.SOA
+	recMX     string
+	recNS     string
+	crtIssuer string
 }
 
 func NewPowerDNSGenericSQLBackend() *PowerDNSGenericSQLBackend {
 	ret := &PowerDNSGenericSQLBackend{
-		recA:    net.ParseIP(env.String("A")),
-		recAAAA: net.ParseIP(env.String("AAAA")),
-		recMX:   env.String("MX"),
-		recNS:   env.String("NS"),
-		ttl:     uint32(env.IntDef("TTL", 3600)),
+		recA:      net.ParseIP(env.String("A")),
+		recAAAA:   net.ParseIP(env.String("AAAA")),
+		recMX:     env.String("MX"),
+		recNS:     env.String("NS"),
+		ttl:       uint32(env.IntDef("TTL", 3600)),
+		crtIssuer: env.StringDef("CERT_ISSUER", "letsencrypt.org"),
 	}
 
 	if !ParseSOA(&ret.recSOA, env.String("SOA")) {
@@ -103,6 +105,11 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			rr.Hdr = hdr
 			rr.Mx = pdb.recMX
 			rr.Preference = 1
+		case *dns.CAA:
+			rr.Hdr = hdr
+			rr.Flag = 0
+			rr.Tag = "issue"
+			rr.Value = pdb.crtIssuer
 		default:
 			// drop unsupported
 			if pdb.Debug {

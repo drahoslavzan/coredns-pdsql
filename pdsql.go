@@ -29,7 +29,7 @@ type PowerDNSGenericSQLBackend struct {
 	recAAAA   net.IP
 	recSOA    dns.SOA
 	recMX     string
-	recNS     string
+	recNSs    []string
 	crtIssuer string
 }
 
@@ -38,9 +38,17 @@ func NewPowerDNSGenericSQLBackend() *PowerDNSGenericSQLBackend {
 		recA:      net.ParseIP(env.String("A")),
 		recAAAA:   net.ParseIP(env.String("AAAA")),
 		recMX:     env.String("MX"),
-		recNS:     env.String("NS"),
 		ttl:       uint32(env.IntDef("TTL", 3600)),
 		crtIssuer: env.StringDef("CERT_ISSUER", "letsencrypt.org"),
+	}
+
+	nss := strings.Split(env.String("NS_CSV"), ",")
+	for _, ns := range nss {
+		if !strings.HasSuffix(ns, ".") {
+			ns += "."
+		}
+
+		ret.recNSs = append(ret.recNSs, ns)
 	}
 
 	if !ParseSOA(&ret.recSOA, env.String("SOA")) {
@@ -94,7 +102,12 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			rr.Hdr = hdr
 		case *dns.NS:
 			rr.Hdr = hdr
-			rr.Ns = pdb.recNS
+			rr.Ns = pdb.recNSs[0]
+			a.Answer = append(a.Answer, rr)
+			for _, ns := range pdb.recNSs[1:] {
+				nr := &dns.NS{Hdr: hdr, Ns: ns}
+				a.Answer = append(a.Answer, nr)
+			}
 		case *dns.A:
 			rr.Hdr = hdr
 			rr.A = pdb.recA
@@ -120,7 +133,7 @@ func (pdb PowerDNSGenericSQLBackend) ServeDNS(ctx context.Context, w dns.Respons
 			if pdb.Debug {
 				log.Printf("invalid RR type: %s\n", stype)
 			}
-		} else {
+		} else if len(a.Answer) < 1 {
 			a.Answer = append(a.Answer, rr)
 		}
 	}
